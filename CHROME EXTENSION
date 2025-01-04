@@ -1,0 +1,191 @@
+{
+  "manifest_version": 3,
+  "name": "Productivity Tracker",
+  "version": "1.0",
+  "description": "Track time spent on websites and boost productivity.",
+  "permissions": [
+    "activeTab",
+    "storage",
+    "tabs",
+    "alarms",
+    "webNavigation"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  }
+}
+
+
+let activeTab = null;
+let startTime = null;
+let timeSpent = {};
+
+chrome.tabs.onActivated.addListener(async (activeInfo) => {
+  const tab = await chrome.tabs.get(activeInfo.tabId);
+  trackTime(tab.url);
+});
+
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  if (changeInfo.status === "complete") {
+    trackTime(tab.url);
+  }
+});
+
+function trackTime(url) {
+  if (activeTab) {
+    const domain = new URL(activeTab).hostname;
+    const endTime = Date.now();
+    const timeSpentOnDomain = endTime - startTime;
+
+    if (!timeSpent[domain]) timeSpent[domain] = 0;
+    timeSpent[domain] += timeSpentOnDomain;
+  }
+
+  activeTab = url;
+  startTime = Date.now();
+}
+
+// Save data periodically
+chrome.alarms.create("saveData", { periodInMinutes: 1 });
+chrome.alarms.onAlarm.addListener(() => {
+  if (activeTab) {
+    const domain = new URL(activeTab).hostname;
+    const endTime = Date.now();
+    const timeSpentOnDomain = endTime - startTime;
+
+    if (!timeSpent[domain]) timeSpent[domain] = 0;
+    timeSpent[domain] += timeSpentOnDomain;
+    chrome.storage.local.set({ timeSpent });
+  }
+});
+
+<!DOCTYPE html>
+<html>
+<head>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <h1>Productivity Tracker</h1>
+  <div id="stats"></div>
+  <div>
+    <h2>Block Websites</h2>
+    <input type="text" id="blockSiteInput" placeholder="Enter website to block">
+    <button id="blockSiteButton">Block</button>
+    <ul id="blockedSites"></ul>
+  </div>
+  <script src="popup.js"></script>
+</body>
+</html>
+
+
+document.addEventListener("DOMContentLoaded", () => {
+  const statsDiv = document.getElementById("stats");
+  const blockSiteButton = document.getElementById("blockSiteButton");
+  const blockSiteInput = document.getElementById("blockSiteInput");
+  const blockedSitesList = document.getElementById("blockedSites");
+
+  chrome.storage.local.get("timeSpent", ({ timeSpent }) => {
+    statsDiv.innerHTML = Object.entries(timeSpent || {})
+      .map(([domain, time]) => `<p>${domain}: ${Math.round(time / 1000)} seconds</p>`)
+      .join("");
+  });
+
+  blockSiteButton.addEventListener("click", () => {
+    const site = blockSiteInput.value;
+    if (!site) return;
+
+    chrome.storage.local.get("blockedSites", ({ blockedSites }) => {
+      blockedSites = blockedSites || [];
+      blockedSites.push(site);
+      chrome.storage.local.set({ blockedSites });
+      updateBlockedSitesList(blockedSites);
+    });
+  });
+
+  chrome.storage.local.get("blockedSites", ({ blockedSites }) => {
+    updateBlockedSitesList(blockedSites || []);
+  });
+
+  function updateBlockedSitesList(blockedSites) {
+    blockedSitesList.innerHTML = blockedSites
+      .map((site) => `<li>${site}</li>`)
+      .join("");
+  }
+});
+
+
+const express = require("express");
+const mongoose = require("mongoose");
+const cors = require("cors");
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+mongoose.connect("mongodb://localhost:27017/productivityTracker", {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+});
+
+const UserSchema = new mongoose.Schema({
+  userId: String,
+  timeSpent: Object,
+  blockedSites: [String],
+});
+
+const User = mongoose.model("User", UserSchema);
+
+// Get user data
+app.get("/user/:id", async (req, res) => {
+  const user = await User.findOne({ userId: req.params.id });
+  res.send(user || {});
+});
+
+// Update user data
+app.post("/user/:id", async (req, res) => {
+  const { timeSpent, blockedSites } = req.body;
+  let user = await User.findOne({ userId: req.params.id });
+
+  if (user) {
+    user.timeSpent = timeSpent;
+    user.blockedSites = blockedSites;
+  } else {
+    user = new User({ userId: req.params.id, timeSpent, blockedSites });
+  }
+
+  await user.save();
+  res.send(user);
+});
+
+const PORT = 5000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+
+
+chrome.alarms.create("syncData", { periodInMinutes: 5 });
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "syncData") {
+    chrome.storage.local.get(["timeSpent", "blockedSites"], ({ timeSpent, blockedSites }) => {
+      fetch("http://localhost:5000/user/123", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ timeSpent, blockedSites }),
+      });
+    });
+  }
+});
